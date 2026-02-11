@@ -19,30 +19,36 @@ def generate_token(params: dict, password: str) -> str:
     return hashlib.sha256(concat.encode("utf-8")).hexdigest()
 
 
-def init_payment(terminal_key: str, password: str, with_receipt: bool = False) -> dict:
+def init_payment(terminal_key: str, password: str, with_receipt: bool = False,
+                  email: str = "test@example.com", amount: int = None) -> dict:
     product = random.choice(PRODUCTS)
     price = random.randint(10000, 100000)
     quantity = random.randint(1, 3)
-    amount = price * quantity
+
+    if amount is not None:
+        price = amount
+        quantity = 1
+
+    total = price * quantity
 
     params = {
         "TerminalKey": terminal_key,
-        "Amount": amount,
+        "Amount": total,
         "OrderId": str(uuid.uuid4())[:36],
         "Description": product,
-        "DATA": {"Email": "test@example.com"},
+        "DATA": {"Email": email},
     }
 
     if with_receipt:
         params["Receipt"] = {
-            "Email": "test@example.com",
+            "Email": email,
             "Taxation": "usn_income",
             "Items": [
                 {
                     "Name": product,
                     "Price": price,
                     "Quantity": quantity,
-                    "Amount": amount,
+                    "Amount": total,
                     "Tax": "none",
                     "PaymentMethod": "full_payment",
                     "PaymentObject": "commodity"
@@ -58,6 +64,67 @@ def cancel_payment(terminal_key: str, password: str, payment_id: str) -> dict:
     params = {"TerminalKey": terminal_key, "PaymentId": payment_id}
     params["Token"] = generate_token(params, password)
     return requests.post(f"{BASE_URL}/Cancel", json=params).json()
+
+
+def create_real_payment(terminal_key: str, password: str):
+    print("\n" + "=" * 40)
+    print("  Создание реального платежа")
+    print("=" * 40)
+
+    # Email
+    email_choice = input("\nУказать свою почту? (y/n, по умолчанию test@example.com): ").strip().lower()
+    if email_choice == 'y':
+        email = input("Email: ").strip()
+        if not email:
+            print("Пустой email, используется test@example.com")
+            email = "test@example.com"
+    else:
+        email = "test@example.com"
+
+    # Сумма
+    amount_choice = input("\nУказать свою сумму? (y/n, по умолчанию случайная): ").strip().lower()
+    custom_amount = None
+    if amount_choice == 'y':
+        raw = input("Сумма в рублях (например 150.50): ").strip()
+        try:
+            custom_amount = int(float(raw) * 100)  # в копейки
+            if custom_amount <= 0:
+                print("Сумма должна быть > 0, используется случайная")
+                custom_amount = None
+        except ValueError:
+            print("Некорректная сумма, используется случайная")
+            custom_amount = None
+
+    # Чек
+    receipt_choice = input("\nНужен чек? (y/n, по умолчанию нет): ").strip().lower()
+    with_receipt = receipt_choice == 'y'
+
+    # Подтверждение
+    print("\n--- Параметры платежа ---")
+    print(f"  Email: {email}")
+    if custom_amount is not None:
+        print(f"  Сумма: {custom_amount / 100:.2f} руб.")
+    else:
+        print("  Сумма: случайная")
+    print(f"  Чек: {'да' if with_receipt else 'нет'}")
+    print("-------------------------")
+
+    confirm = input("\nСоздать платеж? (y/n): ").strip().lower()
+    if confirm != 'y':
+        print("Отменено.")
+        return
+
+    resp = init_payment(terminal_key, password, with_receipt=with_receipt,
+                        email=email, amount=custom_amount)
+    if resp.get("Success"):
+        print(f"\nПлатеж создан!")
+        print(f"  PaymentId: {resp.get('PaymentId')}")
+        print(f"  Сумма: {resp.get('Amount', 0) / 100:.2f} руб.")
+        print(f"  Статус: {resp.get('Status')}")
+        print(f"  URL оплаты: {resp.get('PaymentURL')}")
+    else:
+        print(f"\nОшибка: {resp.get('Message')} (код: {resp.get('ErrorCode')})")
+    wait_continue()
 
 
 def wait_continue():
@@ -159,6 +226,7 @@ def show_menu():
     print("3 - Тест 3")
     print("7 - Тест 7 (с чеком)")
     print("8 - Тест 8")
+    print("9 - Создать реальный платеж (свои параметры)")
     print("0 - Все тесты по порядку")
     print("q - Выход")
 
@@ -170,6 +238,7 @@ def run_single_test(terminal_key: str, password: str, test_num: str):
         "3": test_3,
         "7": test_7,
         "8": test_8,
+        "9": create_real_payment,
     }
     if test_num in tests:
         tests[test_num](terminal_key, password)
@@ -196,7 +265,7 @@ def main():
         elif choice == '0':
             run_all_tests(terminal_key, password)
             print("\nВсе тесты завершены")
-        elif choice in ['1', '2', '3', '7', '8']:
+        elif choice in ['1', '2', '3', '7', '8', '9']:
             run_single_test(terminal_key, password, choice)
         else:
             print("Неверный выбор")
